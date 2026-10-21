@@ -1,0 +1,75 @@
+name: Publish portfolio
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: portfolio-pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+      - name: Prepare reviewed standalone homepage
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, re
+          def blob_sha(text):
+              data = text.encode('utf-8')
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          page = Path('index.html')
+          text = page.read_text(encoding='utf-8')
+          link = '<link href="styles.css" rel="stylesheet"/>'
+          if blob_sha(text) == '78966c3d7b5b24f51b031a012c4be0392d8b2ebd':
+              css = Path('styles.css').read_text(encoding='utf-8')
+              if blob_sha(css) != '16ca2276355871f071b42c8d0b9a2038fde8e97a':
+                  raise SystemExit('Stylesheet changed since review; refusing an unreviewed replacement.')
+              replacement = '<article class="project"><div class="project-content"><div class="project-meta"><span>SDR / ISAC</span><span>Sep 2026 – Present</span></div><div class="project-title"><span class="number">01</span><h3>OFDM Channel Sounder for Virginia Tech ISAC Testbed</h3></div><p>A bistatic OFDM channel sounder using synchronized USRP N310s, currently being developed for an ISAC testbed at Virginia Tech.</p><div class="tags"><span>USRP N310</span><span>Python / UHD</span><span>SciPy</span><span>OFDM</span></div></div><details><summary>Technical details <span aria-hidden="true">+</span></summary><ul><li>Built a bistatic OFDM channel sounder using two USRP N310s at 2.415 GHz and 62.5 MSps, with a shared OctoClock reference and PPS-aligned timed TX/RX on a common device clock.</li><li>Implemented frame synchronization with Zadoff–Chu sequences and per-subcarrier channel estimation to extract channel impulse responses and averaged power delay profiles.</li><li>Generated delay–Doppler maps from 100 symbols at a 100 μs PRI (approximately 100 Hz Doppler resolution), recovering all symbols and the expected Doppler remnants on the link.</li><li>Debugged synchronization and transport issues, including variable daughterboard reinitialization times; characterized hardware timing latency across multiple decimation factors.</li></ul></details></article>'
+              text, count = re.subn(r'<article class="project">.*?</article>', lambda match: replacement, text, count=1, flags=re.S)
+              if count != 1 or text.count(link) != 1:
+                  raise SystemExit('Unexpected homepage structure; no changes written.')
+              text = text.replace(link, '<style>\n' + css + '\n</style>', 1)
+              page.write_text(text, encoding='utf-8')
+          elif link in text:
+              raise SystemExit('Homepage changed since review; refusing an unreviewed replacement.')
+          if '<style' not in text or '<html' not in text:
+              raise SystemExit('A standalone HTML homepage is required.')
+          PY
+      - name: Commit corrected homepage when needed
+        shell: bash
+        run: |
+          if ! git diff --quiet -- index.html; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add index.html
+            git commit -m 'Embed portfolio styles and update OFDM ISAC project'
+            git push origin HEAD:main
+          fi
+      - name: Prepare site artifact
+        shell: bash
+        run: |
+          mkdir -p _site
+          cp index.html _site/index.html
+          touch _site/.nojekyll
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
